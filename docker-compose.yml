@@ -1,0 +1,12 @@
+services:
+  planner:
+    build: .
+    container_name: class-planner
+    ports:
+      - "8787:8787"
+    environment:
+      - DEEPSEEK_API_KEY=${DEEPSEEK_API_KEY}
+      - ACCESS_CODE=${ACCESS_CODE}
+      - RATE_LIMIT=${RATE_LIMIT:-20}
+      - MAX_CONCURRENT=${MAX_CONCURRENT:-2}
+    restart: unless-stopped

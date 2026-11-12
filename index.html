@@ -1,0 +1,428 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>班级事务工作台</title>
+<style>
+  :root {
+    --bg: #f4f5fb; --card: #fff; --ink: #1f2333; --muted: #6b7086;
+    --line: #e6e8f0; --accent: #4f46e5; --ok: #16a34a; --warn: #d97706; --err: #dc2626;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+  }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 60px; }
+  header h1 { font-size: 24px; margin: 0 0 6px; }
+  header p { margin: 0; color: var(--muted); font-size: 14px; }
+  .card {
+    background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+    padding: 20px; margin-top: 18px; box-shadow: 0 1px 2px rgba(16, 24, 40, .04);
+  }
+  .scenarios { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 10px; }
+  .scard {
+    text-align: left; border: 1px solid var(--line); background: #fafaff; border-radius: 12px;
+    padding: 12px; cursor: pointer; font: inherit; display: flex; flex-direction: column; gap: 5px;
+  }
+  .scard:hover { border-color: #c9c6ff; }
+  .scard.active { border-color: var(--accent); box-shadow: 0 0 0 3px #e8e6ff; background: #fff; }
+  .scard .st { font-size: 14px; font-weight: 600; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .scard .stag { font-size: 11px; font-weight: 400; color: #6b6f86; background: #eef0f8; border-radius: 999px; padding: 1px 7px; }
+  .scard .sd { font-size: 12px; color: var(--muted); line-height: 1.5; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; }
+  .grid .full { grid-column: 1 / -1; }
+  label { display: block; font-size: 13px; color: #40465c; margin-bottom: 6px; }
+  input, textarea {
+    width: 100%; padding: 9px 11px; border: 1px solid #d8dbe8; border-radius: 9px;
+    font: inherit; font-size: 14px; background: #fbfbff; color: var(--ink);
+  }
+  input:focus, textarea:focus { outline: 2px solid #c7c4ff; border-color: var(--accent); }
+  textarea { resize: vertical; min-height: 70px; }
+  .row { display: flex; gap: 12px; align-items: center; margin-top: 16px; flex-wrap: wrap; }
+  button { font: inherit; border: 0; border-radius: 10px; padding: 10px 18px; cursor: pointer; font-size: 14px; }
+  .primary { background: var(--accent); color: #fff; }
+  .primary:disabled { opacity: .55; cursor: progress; }
+  .ghost { background: #eef0f8; color: #3c4258; }
+  .ghost:disabled { opacity: .5; cursor: default; }
+  .chips { display: flex; gap: 10px; flex-wrap: wrap; }
+  .chip {
+    display: flex; align-items: center; gap: 7px; border: 1px solid var(--line);
+    border-radius: 999px; padding: 6px 13px; font-size: 13px; color: var(--muted); background: #fafaff;
+  }
+  .chip .dot { width: 8px; height: 8px; border-radius: 50%; background: #c8cce0; }
+  .chip.running { color: #8a5a00; border-color: #f1dca8; background: #fffaf0; }
+  .chip.running .dot { background: var(--warn); animation: pulse 1s infinite; }
+  .chip.ok { color: #12703a; border-color: #c8edd5; background: #f3fdf7; }
+  .chip.ok .dot { background: var(--ok); }
+  .chip.err { color: #a11d1d; border-color: #f3c9c9; background: #fff5f5; }
+  .chip.err .dot { background: var(--err); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  #status { color: var(--muted); font-size: 13px; margin-left: auto; }
+  .toolbar { display: flex; gap: 10px; justify-content: flex-end; margin-bottom: 10px; }
+  .md h1 { font-size: 22px; margin: 18px 0 10px; padding-bottom: 8px; border-bottom: 2px solid #eceefb; }
+  .md h2 { font-size: 19px; margin: 22px 0 10px; color: #333a52; }
+  .md h3 { font-size: 16px; margin: 18px 0 8px; color: #4a5170; }
+  .md p { margin: 8px 0; line-height: 1.75; }
+  .md ul, .md ol { margin: 8px 0; padding-left: 22px; line-height: 1.8; }
+  .md blockquote {
+    margin: 10px 0; padding: 12px 16px; border-left: 3px solid #c9c6ff;
+    background: #f8f8ff; border-radius: 0 8px 8px 0; color: #454b63;
+  }
+  .md code { background: #f0f1fa; padding: 1px 5px; border-radius: 5px; font-size: 13px; }
+  .md .tbl { overflow-x: auto; margin: 12px 0; }
+  .md table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  .md th, .md td { border: 1px solid #e3e5f0; padding: 7px 10px; text-align: left; vertical-align: top; }
+  .md th { background: #f6f6ff; font-weight: 600; white-space: nowrap; }
+  .md tr:nth-child(even) td { background: #fbfbfe; }
+  .md hr { border: 0; border-top: 1px solid #e9eaf2; margin: 18px 0; }
+  .banner {
+    display: none; margin-top: 14px; padding: 10px 14px; border-radius: 10px;
+    background: #fff7e6; border: 1px solid #f3d9a4; color: #8a5a00; font-size: 13px;
+  }
+  .banner.show { display: block; }
+  .warn { margin-bottom: 14px; background: #fff5f5; border-color: #f3c9c9; color: #a11d1d; }
+  .codebox { margin-bottom: 14px; }
+  .code-row { display: flex; gap: 8px; }
+  .code-row input { flex: 1; }
+  .foot { color: #8b90a6; font-size: 12.5px; margin-top: 22px; line-height: 1.7; }
+  details.more { margin-top: 4px; }
+  details.more summary {
+    cursor: pointer; font-size: 13px; color: #4f46e5; padding: 4px 0; user-select: none;
+  }
+  details.more summary:hover { text-decoration: underline; }
+  details.more[open] summary { margin-bottom: 10px; }
+  @media (max-width: 640px) {
+    .wrap { padding: 18px 12px 40px; }
+    header h1 { font-size: 20px; }
+    .card { padding: 16px 14px; border-radius: 12px; }
+    #status { margin-left: 0; width: 100%; }
+    .toolbar { justify-content: stretch; }
+    .toolbar button { flex: 1; }
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>班级事务工作台</h1>
+    <p>选一件事，多个智能体并行处理，最后合成一份能直接用的成果。</p>
+  </header>
+
+  <section class="card">
+    <div class="scenarios" id="scenarios"></div>
+  </section>
+
+  <form id="plan-form" class="card">
+    <div class="codebox" id="codebox" hidden>
+      <label for="code">访问口令（老师或班长给你的）</label>
+      <div class="code-row">
+        <input id="code" type="password" placeholder="输入口令后会自动记住" autocomplete="off">
+        <button type="button" class="ghost" id="save-code">记住</button>
+      </div>
+    </div>
+    <div class="banner warn" id="warn"></div>
+    <details class="more">
+      <summary>填写细节（已预填示例，不改也能直接生成）</summary>
+      <div class="grid" id="fields"></div>
+    </details>
+    <div class="row">
+      <button type="submit" class="primary" id="go">生成</button>
+      <button type="button" class="ghost" id="reset">重置为示例</button>
+      <span id="status">选择一件事开始</span>
+    </div>
+    <div class="banner" id="mock">演示模式：没有检测到 DEEPSEEK_API_KEY，返回的是简版示例。设置密钥后重启服务即可真实生成。</div>
+  </form>
+
+  <section class="card">
+    <div class="chips" id="chips"></div>
+  </section>
+
+  <section class="card" id="result" hidden>
+    <div class="toolbar">
+      <button type="button" class="ghost" id="copy" disabled>复制</button>
+      <button type="button" class="ghost" id="download" disabled>下载 .md</button>
+    </div>
+    <div class="md" id="content"></div>
+  </section>
+
+  <p class="foot">
+    提示：服务只监听 127.0.0.1（部署后由平台托管），密钥放在环境变量里，不写进网页。
+    涉及成绩、家庭情况、学生心理状态的材料，请先脱敏再粘贴。AI 生成的日期、预算、审批要求请人工核对。
+  </p>
+</div>
+
+<script type="module">
+import { mdToHtml } from './md.js';
+
+const $ = (id) => document.getElementById(id);
+
+let scenarios = [];
+let current = null;
+let finalMd = '';
+let lastError = null;
+let accessCode = localStorage.getItem('plan_access_code') || '';
+
+const chipMap = new Map();
+const codebox = $('codebox');
+const codeInput = $('code');
+const statusEl = $('status');
+const resultEl = $('result');
+const contentEl = $('content');
+const mockEl = $('mock');
+const warnEl = $('warn');
+const goBtn = $('go');
+const copyBtn = $('copy');
+const downloadBtn = $('download');
+
+function setChip(key, state) {
+  const el = chipMap.get(key);
+  if (!el) return;
+  el.classList.remove('running', 'ok', 'err');
+  if (state) el.classList.add(state);
+}
+
+function renderScenarioCards() {
+  const box = $('scenarios');
+  box.innerHTML = '';
+  for (const s of scenarios) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'scard';
+    btn.dataset.id = s.id;
+    const st = document.createElement('div');
+    st.className = 'st';
+    const title = document.createElement('span');
+    title.textContent = s.title;
+    const tag = document.createElement('span');
+    tag.className = 'stag';
+    tag.textContent = s.tag;
+    st.append(title, tag);
+    const desc = document.createElement('div');
+    desc.className = 'sd';
+    desc.textContent = s.desc;
+    btn.append(st, desc);
+    btn.addEventListener('click', () => selectScenario(s));
+    box.appendChild(btn);
+  }
+}
+
+function renderFields() {
+  const grid = $('fields');
+  grid.innerHTML = '';
+  for (const f of current.fields) {
+    const wrap = document.createElement('div');
+    if (f.type === 'textarea') wrap.className = 'full';
+    const label = document.createElement('label');
+    label.htmlFor = 'f_' + f.id;
+    label.textContent = f.label;
+    const input = document.createElement(f.type === 'textarea' ? 'textarea' : 'input');
+    input.id = 'f_' + f.id;
+    input.value = f.value || '';
+    wrap.append(label, input);
+    grid.appendChild(wrap);
+  }
+}
+
+function renderChips() {
+  const box = $('chips');
+  box.innerHTML = '';
+  chipMap.clear();
+  const items = [
+    ...current.dimensions.map((d) => ({ key: d.key, label: d.label })),
+    { key: 'merge', label: '合成成果' },
+  ];
+  for (const a of items) {
+    const el = document.createElement('div');
+    el.className = 'chip';
+    el.innerHTML = '<span class="dot"></span><span></span>';
+    el.lastElementChild.textContent = a.label;
+    box.appendChild(el);
+    chipMap.set(a.key, el);
+  }
+}
+
+function selectScenario(s) {
+  current = s;
+  localStorage.setItem('planner_scenario', s.id);
+  document.querySelectorAll('.scard').forEach((el) => el.classList.toggle('active', el.dataset.id === s.id));
+  renderFields();
+  renderChips();
+  resultEl.hidden = true;
+  contentEl.innerHTML = '';
+  finalMd = '';
+  lastError = null;
+  warnEl.textContent = s.warning || '';
+  warnEl.classList.toggle('show', Boolean(s.warning));
+  mockEl.classList.remove('show');
+  statusEl.textContent = '填好后点生成';
+  copyBtn.disabled = true;
+  downloadBtn.disabled = true;
+}
+
+function buildBrief() {
+  return current.fields
+    .map((f) => {
+      const el = $('f_' + f.id);
+      const value = el ? el.value.trim() : '';
+      return value ? `${f.label}：${value}` : '';
+    })
+    .filter(Boolean)
+    .join('\n');
+}
+
+function setBusy(busy) {
+  goBtn.disabled = busy;
+  goBtn.textContent = busy ? '生成中…' : '生成';
+  copyBtn.disabled = busy || !finalMd;
+  downloadBtn.disabled = busy || !finalMd;
+}
+
+function handleEvent(ev) {
+  if (ev.type === 'start') {
+    mockEl.classList.toggle('show', Boolean(ev.mock));
+    statusEl.textContent = ev.mock ? '演示模式生成中…' : '多个智能体并行工作中…';
+  } else if (ev.type === 'agent') {
+    setChip(ev.key, ev.status);
+  } else if (ev.type === 'final') {
+    finalMd = ev.text || '';
+    contentEl.innerHTML = mdToHtml(finalMd);
+    resultEl.hidden = false;
+    statusEl.textContent = '完成 · 可以复制或下载';
+  } else if (ev.type === 'error') {
+    lastError = ev.message || '未知错误';
+  }
+}
+
+$('plan-form').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  if (!current) return;
+  const brief = buildBrief();
+  if (brief.length < 5) {
+    statusEl.textContent = '内容太短了，至少写 5 个字';
+    return;
+  }
+
+  finalMd = '';
+  lastError = null;
+  resultEl.hidden = true;
+  contentEl.innerHTML = '';
+  renderChips();
+  setBusy(true);
+  statusEl.textContent = '正在连接…';
+
+  try {
+    const res = await fetch('/api/plan', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(accessCode ? { 'X-Access-Code': accessCode } : {}),
+      },
+      body: JSON.stringify({ scenarioId: current.id, brief }),
+    });
+
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (res.status === 401) codebox.hidden = false;
+      throw new Error(data.error || `HTTP ${res.status}`);
+    }
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop();
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        handleEvent(JSON.parse(line));
+      }
+    }
+    if (buffer.trim()) handleEvent(JSON.parse(buffer));
+
+    if (lastError) statusEl.textContent = '出错：' + lastError;
+    else if (!finalMd) statusEl.textContent = '没有拿到结果，请重试';
+  } catch (err) {
+    statusEl.textContent = '出错：' + (err.message || err);
+  } finally {
+    setBusy(false);
+  }
+});
+
+$('reset').addEventListener('click', () => {
+  if (!current) return;
+  renderFields();
+  finalMd = '';
+  lastError = null;
+  resultEl.hidden = true;
+  contentEl.innerHTML = '';
+  renderChips();
+  mockEl.classList.remove('show');
+  statusEl.textContent = '已重置为示例，可修改后生成';
+  copyBtn.disabled = true;
+  downloadBtn.disabled = true;
+});
+
+copyBtn.addEventListener('click', async () => {
+  if (!finalMd) return;
+  try {
+    await navigator.clipboard.writeText(finalMd);
+    copyBtn.textContent = '已复制';
+    setTimeout(() => (copyBtn.textContent = '复制'), 1500);
+  } catch {
+    statusEl.textContent = '浏览器不允许复制，请手动选择文本';
+  }
+});
+
+downloadBtn.addEventListener('click', () => {
+  if (!finalMd) return;
+  const name = current ? current.title : '班级事务';
+  const blob = new Blob([finalMd], { type: 'text/markdown;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = `${name}-成果.md`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+$('save-code').addEventListener('click', () => {
+  accessCode = codeInput.value.trim();
+  if (accessCode) localStorage.setItem('plan_access_code', accessCode);
+  else localStorage.removeItem('plan_access_code');
+  statusEl.textContent = accessCode ? '口令已记住，可以生成了' : '已清除口令';
+});
+
+fetch('/config')
+  .then((r) => r.json())
+  .then((cfg) => {
+    if (cfg.needCode) {
+      codebox.hidden = false;
+      if (accessCode) codeInput.value = accessCode;
+    }
+  })
+  .catch(() => {});
+
+async function boot() {
+  try {
+    const res = await fetch('/scenarios');
+    const data = await res.json();
+    scenarios = data.scenarios || [];
+    renderScenarioCards();
+    const saved = scenarios.find((s) => s.id === localStorage.getItem('planner_scenario'));
+    selectScenario(saved || scenarios[0]);
+  } catch {
+    statusEl.textContent = '加载场景失败，请确认服务已启动';
+  }
+}
+
+boot();
+</script>
+</body>
+</html>
