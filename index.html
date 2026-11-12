@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta http-equiv="x-ua-compatible" content="ie=edge">
 <title>班级事务工作台</title>
 <style>
   :root {
@@ -13,6 +14,7 @@
   body {
     margin: 0; background: var(--bg); color: var(--ink);
     font-family: system-ui, -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    -webkit-text-size-adjust: 100%;
   }
   .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 60px; }
   header h1 { font-size: 24px; margin: 0 0 6px; }
@@ -93,6 +95,45 @@
   }
   details.more summary:hover { text-decoration: underline; }
   details.more[open] summary { margin-bottom: 10px; }
+  /* 智能助手 */
+  .chat-fab {
+    position: fixed; right: 18px; bottom: 18px; z-index: 80;
+    border: 0; border-radius: 999px; background: var(--accent); color: #fff;
+    padding: 12px 18px; font-size: 14px; cursor: pointer;
+    box-shadow: 0 8px 24px rgba(79, 70, 229, .35);
+  }
+  .chat-panel {
+    position: fixed; right: 18px; bottom: 76px; z-index: 90;
+    width: 380px; max-width: calc(100vw - 36px); height: 500px; max-height: 72vh;
+    background: #fff; border: 1px solid var(--line); border-radius: 16px;
+    box-shadow: 0 20px 60px rgba(16, 24, 40, .22);
+    display: none; flex-direction: column; overflow: hidden;
+  }
+  .chat-panel.show { display: flex; }
+  .chat-head {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 12px 14px; border-bottom: 1px solid var(--line);
+    font-weight: 600; font-size: 14px;
+  }
+  .chat-head button { padding: 4px 10px; font-size: 12px; }
+  .chat-body {
+    flex: 1; overflow-y: auto; padding: 12px; background: #fafaff;
+    display: flex; flex-direction: column; gap: 10px;
+  }
+  .msg { max-width: 90%; padding: 9px 12px; border-radius: 12px; font-size: 13.5px; line-height: 1.6; word-break: break-word; }
+  .msg.user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 4px; }
+  .msg.bot { align-self: flex-start; background: #fff; border: 1px solid var(--line); border-bottom-left-radius: 4px; }
+  .msg.bot .md p { margin: 6px 0; }
+  .msg.bot .md table { font-size: 12.5px; }
+  .msg.bot .md h1, .msg.bot .md h2, .msg.bot .md h3 { font-size: 14px; margin: 10px 0 6px; border: 0; padding: 0; }
+  .msg.bot .md ul, .msg.bot .md ol { padding-left: 18px; }
+  .msg.bot .md .tbl { margin: 8px 0; }
+  .msg.bot .md blockquote { padding: 8px 10px; margin: 8px 0; }
+  .msg.pending { color: var(--muted); }
+  .chat-foot { display: flex; gap: 8px; padding: 10px; border-top: 1px solid var(--line); background: #fff; }
+  .chat-foot textarea { flex: 1; min-height: 44px; max-height: 110px; padding: 10px 11px; }
+  .chat-foot button { padding: 0 18px; }
+
   @media (max-width: 640px) {
     .wrap { padding: 18px 12px 40px; }
     header h1 { font-size: 20px; }
@@ -100,6 +141,7 @@
     #status { margin-left: 0; width: 100%; }
     .toolbar { justify-content: stretch; }
     .toolbar button { flex: 1; }
+    input, textarea { font-size: 16px; }
   }
 </style>
 </head>
@@ -153,16 +195,134 @@
   </p>
 </div>
 
+<button type="button" class="chat-fab" id="chat-fab">🤖 问助手</button>
+<div class="chat-panel" id="chat-panel">
+  <div class="chat-head">
+    <span>班级事务助手</span>
+    <button type="button" class="ghost" id="chat-close">关闭</button>
+  </div>
+  <div class="chat-body" id="chat-body"></div>
+  <div class="chat-foot">
+    <textarea id="chat-input" rows="1" placeholder="比如：帮我写个防诈骗主题班会的通知，下周三晚 7 点"></textarea>
+    <button type="button" class="primary" id="chat-send">发送</button>
+  </div>
+</div>
+
 <script type="module">
 import { mdToHtml } from './md.js';
 
 const $ = (id) => document.getElementById(id);
 
+// ── 兼容层：老浏览器 / 手机内置浏览器也能用 ──────────────────
+function storeGet(key) {
+  try { return window.localStorage.getItem(key); } catch (e) { return null; }
+}
+function storeSet(key, value) {
+  try { window.localStorage.setItem(key, value); } catch (e) { /* 隐私模式忽略 */ }
+}
+function storeDel(key) {
+  try { window.localStorage.removeItem(key); } catch (e) { /* 忽略 */ }
+}
+const hasFetch = typeof window.fetch === 'function';
+
+function getJson(url) {
+  return new Promise((resolve, reject) => {
+    if (hasFetch) {
+      fetch(url).then((r) => r.json()).then(resolve).catch(reject);
+      return;
+    }
+    const xhr = new XMLHttpRequest();
+    xhr.open('GET', url, true);
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText)); } catch (e) { reject(e); }
+      } else {
+        reject(new Error('HTTP ' + xhr.status));
+      }
+    };
+    xhr.onerror = () => reject(new Error('网络错误'));
+    xhr.send();
+  });
+}
+
+function consumeText(text) {
+  text.split('\n').forEach((line) => {
+    if (!line.trim()) return;
+    try { handleEvent(JSON.parse(line)); } catch (e) { /* 跳过坏行 */ }
+  });
+}
+
+function fetchPlan(brief, headers) {
+  return fetch('/api/plan', {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ scenarioId: current.id, brief }),
+  }).then((res) => {
+    if (!res.ok) {
+      return res.text().then((text) => {
+        let msg = 'HTTP ' + res.status;
+        try { const data = JSON.parse(text); if (data && data.error) msg = data.error; } catch (e) { /* ignore */ }
+        if (res.status === 401) codebox.hidden = false;
+        throw new Error(msg);
+      });
+    }
+    const canStream = res.body && typeof res.body.getReader === 'function' && typeof TextDecoder !== 'undefined';
+    if (canStream) {
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      const pump = () => reader.read().then(({ value, done }) => {
+        if (done) {
+          if (buffer.trim()) consumeText(buffer);
+          return undefined;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        const idx = buffer.lastIndexOf('\n');
+        if (idx >= 0) {
+          consumeText(buffer.slice(0, idx));
+          buffer = buffer.slice(idx + 1);
+        }
+        return pump();
+      });
+      return pump();
+    }
+    statusEl.textContent = '正在生成（当前浏览器不支持进度显示），请稍候 30–60 秒…';
+    return res.text().then(consumeText);
+  });
+}
+
+function xhrPlan(brief, headers) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/plan', true);
+    Object.keys(headers).forEach((k) => xhr.setRequestHeader(k, headers[k]));
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        consumeText(xhr.responseText);
+        resolve();
+        return;
+      }
+      let msg = 'HTTP ' + xhr.status;
+      try { const data = JSON.parse(xhr.responseText); if (data && data.error) msg = data.error; } catch (e) { /* ignore */ }
+      if (xhr.status === 401) codebox.hidden = false;
+      reject(new Error(msg));
+    };
+    xhr.onerror = () => reject(new Error('网络错误'));
+    xhr.send(JSON.stringify({ scenarioId: current.id, brief }));
+  });
+}
+
+function postPlan(brief, headers) {
+  return hasFetch ? fetchPlan(brief, headers) : xhrPlan(brief, headers);
+}
+
 let scenarios = [];
 let current = null;
 let finalMd = '';
 let lastError = null;
-let accessCode = localStorage.getItem('plan_access_code') || '';
+let accessCode = storeGet('plan_access_code') || '';
 
 const chipMap = new Map();
 const codebox = $('codebox');
@@ -198,11 +358,13 @@ function renderScenarioCards() {
     const tag = document.createElement('span');
     tag.className = 'stag';
     tag.textContent = s.tag;
-    st.append(title, tag);
+    st.appendChild(title);
+    st.appendChild(tag);
     const desc = document.createElement('div');
     desc.className = 'sd';
     desc.textContent = s.desc;
-    btn.append(st, desc);
+    btn.appendChild(st);
+    btn.appendChild(desc);
     btn.addEventListener('click', () => selectScenario(s));
     box.appendChild(btn);
   }
@@ -220,7 +382,8 @@ function renderFields() {
     const input = document.createElement(f.type === 'textarea' ? 'textarea' : 'input');
     input.id = 'f_' + f.id;
     input.value = f.value || '';
-    wrap.append(label, input);
+    wrap.appendChild(label);
+    wrap.appendChild(input);
     grid.appendChild(wrap);
   }
 }
@@ -245,8 +408,11 @@ function renderChips() {
 
 function selectScenario(s) {
   current = s;
-  localStorage.setItem('planner_scenario', s.id);
-  document.querySelectorAll('.scard').forEach((el) => el.classList.toggle('active', el.dataset.id === s.id));
+  storeSet('planner_scenario', s.id);
+  const cards = document.querySelectorAll('.scard');
+  for (let i = 0; i < cards.length; i++) {
+    cards[i].className = cards[i].getAttribute('data-id') === s.id ? 'scard active' : 'scard';
+  }
   renderFields();
   renderChips();
   resultEl.hidden = true;
@@ -313,37 +479,11 @@ $('plan-form').addEventListener('submit', async (e) => {
   statusEl.textContent = '正在连接…';
 
   try {
-    const res = await fetch('/api/plan', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        ...(accessCode ? { 'X-Access-Code': accessCode } : {}),
-      },
-      body: JSON.stringify({ scenarioId: current.id, brief }),
-    });
+    const headers = { 'Content-Type': 'application/json' };
+    if (accessCode) headers['X-Access-Code'] = accessCode;
+    if (!hasFetch) statusEl.textContent = '正在生成（兼容模式），请稍候 30–60 秒…';
 
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}));
-      if (res.status === 401) codebox.hidden = false;
-      throw new Error(data.error || `HTTP ${res.status}`);
-    }
-
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      buffer = lines.pop();
-      for (const line of lines) {
-        if (!line.trim()) continue;
-        handleEvent(JSON.parse(line));
-      }
-    }
-    if (buffer.trim()) handleEvent(JSON.parse(buffer));
+    await postPlan(brief, headers);
 
     if (lastError) statusEl.textContent = '出错：' + lastError;
     else if (!finalMd) statusEl.textContent = '没有拿到结果，请重试';
@@ -370,11 +510,27 @@ $('reset').addEventListener('click', () => {
 
 copyBtn.addEventListener('click', async () => {
   if (!finalMd) return;
+  let ok = false;
   try {
-    await navigator.clipboard.writeText(finalMd);
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(finalMd);
+      ok = true;
+    }
+  } catch (e) { /* 走降级方案 */ }
+  if (!ok) {
+    const ta = document.createElement('textarea');
+    ta.value = finalMd;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { ok = document.execCommand('copy'); } catch (e) { /* 忽略 */ }
+    document.body.removeChild(ta);
+  }
+  if (ok) {
     copyBtn.textContent = '已复制';
     setTimeout(() => (copyBtn.textContent = '复制'), 1500);
-  } catch {
+  } else {
     statusEl.textContent = '浏览器不允许复制，请手动选择文本';
   }
 });
@@ -394,13 +550,12 @@ downloadBtn.addEventListener('click', () => {
 
 $('save-code').addEventListener('click', () => {
   accessCode = codeInput.value.trim();
-  if (accessCode) localStorage.setItem('plan_access_code', accessCode);
-  else localStorage.removeItem('plan_access_code');
+  if (accessCode) storeSet('plan_access_code', accessCode);
+  else storeDel('plan_access_code');
   statusEl.textContent = accessCode ? '口令已记住，可以生成了' : '已清除口令';
 });
 
-fetch('/config')
-  .then((r) => r.json())
+getJson('/config')
   .then((cfg) => {
     if (cfg.needCode) {
       codebox.hidden = false;
@@ -409,15 +564,128 @@ fetch('/config')
   })
   .catch(() => {});
 
+// ── 智能助手 ──────────────────────────────────────────────
+const chatFab = $('chat-fab');
+const chatPanel = $('chat-panel');
+const chatBody = $('chat-body');
+const chatInput = $('chat-input');
+const chatSend = $('chat-send');
+let chatHistory = [];
+let chatBusy = false;
+
+function chatHeaders() {
+  const h = { 'Content-Type': 'application/json' };
+  if (accessCode) h['X-Access-Code'] = accessCode;
+  return h;
+}
+
+function appendMsg(role, text) {
+  const div = document.createElement('div');
+  div.className = 'msg ' + role;
+  if (role === 'user') div.textContent = text;
+  else div.innerHTML = '<div class="md">' + mdToHtml(text) + '</div>';
+  chatBody.appendChild(div);
+  chatBody.scrollTop = chatBody.scrollHeight;
+  return div;
+}
+
+function postChat(payload) {
+  const body = JSON.stringify(payload);
+  if (hasFetch) {
+    return fetch('/api/chat', { method: 'POST', headers: chatHeaders(), body }).then((res) =>
+      res.text().then((text) => {
+        if (!res.ok) {
+          let msg = 'HTTP ' + res.status;
+          try { const d = JSON.parse(text); if (d && d.error) msg = d.error; } catch (e) { /* ignore */ }
+          if (res.status === 401) codebox.hidden = false;
+          throw new Error(msg);
+        }
+        return JSON.parse(text);
+      }),
+    );
+  }
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', '/api/chat', true);
+    const h = chatHeaders();
+    Object.keys(h).forEach((k) => xhr.setRequestHeader(k, h[k]));
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState !== 4) return;
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try { resolve(JSON.parse(xhr.responseText)); } catch (e) { reject(e); }
+        return;
+      }
+      let msg = 'HTTP ' + xhr.status;
+      try { const d = JSON.parse(xhr.responseText); if (d && d.error) msg = d.error; } catch (e) { /* ignore */ }
+      if (xhr.status === 401) codebox.hidden = false;
+      reject(new Error(msg));
+    };
+    xhr.onerror = () => reject(new Error('网络错误'));
+    xhr.send(body);
+  });
+}
+
+async function sendChat() {
+  if (chatBusy) return;
+  const text = chatInput.value.trim();
+  if (!text) return;
+  chatInput.value = '';
+  appendMsg('user', text);
+  chatHistory.push({ role: 'user', content: text });
+  chatBusy = true;
+  chatSend.disabled = true;
+  const pending = appendMsg('bot', '正在思考…');
+  pending.classList.add('pending');
+  try {
+    const brief = current ? buildBrief() : '';
+    const data = await postChat({ messages: chatHistory.slice(-10), brief });
+    pending.classList.remove('pending');
+    pending.innerHTML = '<div class="md">' + mdToHtml(data.reply || '（没有回复）') + '</div>';
+    chatHistory.push({ role: 'assistant', content: data.reply || '' });
+  } catch (err) {
+    pending.classList.remove('pending');
+    pending.textContent = '出错：' + (err.message || err);
+  } finally {
+    chatBusy = false;
+    chatSend.disabled = false;
+    chatBody.scrollTop = chatBody.scrollHeight;
+  }
+}
+
+chatFab.addEventListener('click', () => {
+  chatPanel.classList.toggle('show');
+  if (chatPanel.classList.contains('show')) {
+    if (chatBody.childElementCount === 0) {
+      appendMsg(
+        'bot',
+        '你好，我是班级事务助手。\n\n可以直接说需求，比如：\n- 「写个防诈骗主题班会的通知，下周三晚 7 点，45 人」\n- 「帮我做一个奖学金材料核对表」\n- 「这周有哪些事要跟进，帮我列个周报」\n\n也可以让我根据表单里已填的内容改一版。',
+      );
+    }
+    chatInput.focus();
+  }
+});
+
+$('chat-close').addEventListener('click', () => chatPanel.classList.remove('show'));
+chatSend.addEventListener('click', sendChat);
+chatInput.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+    e.preventDefault();
+    sendChat();
+  }
+});
+
 async function boot() {
   try {
-    const res = await fetch('/scenarios');
-    const data = await res.json();
+    const data = await getJson('/scenarios');
     scenarios = data.scenarios || [];
     renderScenarioCards();
-    const saved = scenarios.find((s) => s.id === localStorage.getItem('planner_scenario'));
+    const savedId = storeGet('planner_scenario');
+    let saved = null;
+    for (let i = 0; i < scenarios.length; i++) {
+      if (scenarios[i].id === savedId) { saved = scenarios[i]; break; }
+    }
     selectScenario(saved || scenarios[0]);
-  } catch {
+  } catch (e) {
     statusEl.textContent = '加载场景失败，请确认服务已启动';
   }
 }
