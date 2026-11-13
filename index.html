@@ -134,6 +134,14 @@
   .chat-foot textarea { flex: 1; min-height: 44px; max-height: 110px; padding: 10px 11px; }
   .chat-foot button { padding: 0 18px; }
 
+  .attach-list { display: none; gap: 6px; flex-wrap: wrap; padding: 8px 10px 0; background: #fff; }
+  .attach-list.show { display: flex; }
+  .attach { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; background: #eef0f8; border-radius: 999px; padding: 3px 8px; }
+  .attach button { border: 0; background: transparent; cursor: pointer; font-size: 12px; color: #6b7086; padding: 0 2px; }
+  .attach-btn { padding: 0 9px; }
+  .msg-actions { display: flex; gap: 6px; margin-top: 6px; }
+  .msg-actions button { padding: 3px 8px; font-size: 11.5px; }
+
   @media (max-width: 640px) {
     .wrap { padding: 18px 12px 40px; }
     header h1 { font-size: 20px; }
@@ -202,8 +210,11 @@
     <button type="button" class="ghost" id="chat-close">关闭</button>
   </div>
   <div class="chat-body" id="chat-body"></div>
+  <div class="attach-list" id="attach-list"></div>
   <div class="chat-foot">
-    <textarea id="chat-input" rows="1" placeholder="比如：帮我写个防诈骗主题班会的通知，下周三晚 7 点"></textarea>
+    <button type="button" class="ghost attach-btn" id="chat-attach" title="上传文本文件（txt/md/csv/json/log）">📎</button>
+    <input type="file" id="chat-file" multiple accept=".txt,.md,.markdown,.csv,.json,.log" hidden>
+    <textarea id="chat-input" rows="1" placeholder="描述你要什么，或上传文件让我照着做"></textarea>
     <button type="button" class="primary" id="chat-send">发送</button>
   </div>
 </div>
@@ -508,18 +519,17 @@ $('reset').addEventListener('click', () => {
   downloadBtn.disabled = true;
 });
 
-copyBtn.addEventListener('click', async () => {
-  if (!finalMd) return;
+async function copyText(text) {
   let ok = false;
   try {
     if (navigator.clipboard && navigator.clipboard.writeText) {
-      await navigator.clipboard.writeText(finalMd);
+      await navigator.clipboard.writeText(text);
       ok = true;
     }
   } catch (e) { /* 走降级方案 */ }
   if (!ok) {
     const ta = document.createElement('textarea');
-    ta.value = finalMd;
+    ta.value = text;
     ta.style.position = 'fixed';
     ta.style.opacity = '0';
     document.body.appendChild(ta);
@@ -527,6 +537,27 @@ copyBtn.addEventListener('click', async () => {
     try { ok = document.execCommand('copy'); } catch (e) { /* 忽略 */ }
     document.body.removeChild(ta);
   }
+  return ok;
+}
+
+function downloadText(text, filename) {
+  try {
+    const blob = new Blob([text], { type: 'text/markdown;charset=utf-8' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  } catch (e) {
+    statusEl.textContent = '浏览器不支持下载，请手动复制';
+  }
+}
+
+copyBtn.addEventListener('click', async () => {
+  if (!finalMd) return;
+  const ok = await copyText(finalMd);
   if (ok) {
     copyBtn.textContent = '已复制';
     setTimeout(() => (copyBtn.textContent = '复制'), 1500);
@@ -538,14 +569,7 @@ copyBtn.addEventListener('click', async () => {
 downloadBtn.addEventListener('click', () => {
   if (!finalMd) return;
   const name = current ? current.title : '班级事务';
-  const blob = new Blob([finalMd], { type: 'text/markdown;charset=utf-8' });
-  const a = document.createElement('a');
-  a.href = URL.createObjectURL(blob);
-  a.download = `${name}-成果.md`;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+  downloadText(finalMd, name + '-成果.md');
 });
 
 $('save-code').addEventListener('click', () => {
@@ -572,6 +596,79 @@ const chatInput = $('chat-input');
 const chatSend = $('chat-send');
 let chatHistory = [];
 let chatBusy = false;
+
+const chatAttach = $('chat-attach');
+const chatFile = $('chat-file');
+const attachList = $('attach-list');
+let chatAttachments = [];
+
+function renderAttachments() {
+  attachList.innerHTML = '';
+  if (!chatAttachments.length) {
+    attachList.classList.remove('show');
+    return;
+  }
+  attachList.classList.add('show');
+  chatAttachments.forEach((f, idx) => {
+    const chip = document.createElement('span');
+    chip.className = 'attach';
+    chip.textContent = f.name;
+    const rm = document.createElement('button');
+    rm.type = 'button';
+    rm.textContent = '×';
+    rm.addEventListener('click', () => {
+      chatAttachments.splice(idx, 1);
+      renderAttachments();
+    });
+    chip.appendChild(rm);
+    attachList.appendChild(chip);
+  });
+}
+
+function addFiles(fileList) {
+  const list = Array.prototype.slice.call(fileList);
+  list.forEach((file) => {
+    if (file.size > 200 * 1024) {
+      statusEl.textContent = '文件太大（上限 200KB）：' + file.name;
+      return;
+    }
+    if (!/\.(txt|md|markdown|csv|json|log)$/i.test(file.name)) {
+      statusEl.textContent = '只支持文本类文件（txt/md/csv/json/log）：' + file.name;
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      chatAttachments.push({ name: file.name, content: String(reader.result).slice(0, 20000) });
+      renderAttachments();
+    };
+    reader.onerror = () => {
+      statusEl.textContent = '读取文件失败：' + file.name;
+    };
+    reader.readAsText(file);
+  });
+}
+
+function addMsgActions(container, text) {
+  const bar = document.createElement('div');
+  bar.className = 'msg-actions';
+  const copy = document.createElement('button');
+  copy.type = 'button';
+  copy.className = 'ghost';
+  copy.textContent = '复制';
+  copy.addEventListener('click', async () => {
+    const ok = await copyText(text);
+    copy.textContent = ok ? '已复制' : '失败';
+    setTimeout(() => (copy.textContent = '复制'), 1200);
+  });
+  const dl = document.createElement('button');
+  dl.type = 'button';
+  dl.className = 'ghost';
+  dl.textContent = '下载 .md';
+  dl.addEventListener('click', () => downloadText(text, '助手回复.md'));
+  bar.appendChild(copy);
+  bar.appendChild(dl);
+  container.appendChild(bar);
+}
 
 function chatHeaders() {
   const h = { 'Content-Type': 'application/json' };
@@ -628,19 +725,25 @@ function postChat(payload) {
 async function sendChat() {
   if (chatBusy) return;
   const text = chatInput.value.trim();
-  if (!text) return;
+  if (!text && chatAttachments.length === 0) return;
+  const files = chatAttachments.slice();
+  const suffix = files.length ? '\n\n（附带文件：' + files.map((f) => f.name).join('、') + '）' : '';
+  const display = (text || '（见附件）') + suffix;
   chatInput.value = '';
-  appendMsg('user', text);
-  chatHistory.push({ role: 'user', content: text });
+  chatAttachments = [];
+  renderAttachments();
+  appendMsg('user', display);
+  chatHistory.push({ role: 'user', content: display });
   chatBusy = true;
   chatSend.disabled = true;
   const pending = appendMsg('bot', '正在思考…');
   pending.classList.add('pending');
   try {
     const brief = current ? buildBrief() : '';
-    const data = await postChat({ messages: chatHistory.slice(-10), brief });
+    const data = await postChat({ messages: chatHistory.slice(-10), brief, files });
     pending.classList.remove('pending');
     pending.innerHTML = '<div class="md">' + mdToHtml(data.reply || '（没有回复）') + '</div>';
+    addMsgActions(pending, data.reply || '');
     chatHistory.push({ role: 'assistant', content: data.reply || '' });
   } catch (err) {
     pending.classList.remove('pending');
@@ -658,7 +761,7 @@ chatFab.addEventListener('click', () => {
     if (chatBody.childElementCount === 0) {
       appendMsg(
         'bot',
-        '你好，我是班级事务助手。\n\n可以直接说需求，比如：\n- 「写个防诈骗主题班会的通知，下周三晚 7 点，45 人」\n- 「帮我做一个奖学金材料核对表」\n- 「这周有哪些事要跟进，帮我列个周报」\n\n也可以让我根据表单里已填的内容改一版。',
+        '你好，我是班级事务助手。\n\n可以直接说需求，比如：\n- 「写个防诈骗主题班会的通知，下周三晚 7 点，45 人」\n- 「帮我做一个奖学金材料核对表」\n- 「这周有哪些事要跟进，帮我列个周报」\n\n也可以点 📎 上传文件（txt / md / csv / json），让我照着文件内容做。',
       );
     }
     chatInput.focus();
@@ -672,6 +775,11 @@ chatInput.addEventListener('keydown', (e) => {
     e.preventDefault();
     sendChat();
   }
+});
+chatAttach.addEventListener('click', () => chatFile.click());
+chatFile.addEventListener('change', () => {
+  addFiles(chatFile.files);
+  chatFile.value = '';
 });
 
 async function boot() {
