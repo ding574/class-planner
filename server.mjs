@@ -116,7 +116,8 @@ async function callModel(messages, maxTokens, temperature = 0.7) {
 }
 
 // ── 提示词 ────────────────────────────────────────────────────────
-function dimensionMessages(scenario, dim, brief) {
+function dimensionMessages(scenario, dim, brief, prefs) {
+  const prefText = prefs ? `\n\n用户偏好（优先满足）：${prefs}` : '';
   return [
     {
       role: 'system',
@@ -131,12 +132,12 @@ ${brief}
 
 你负责「${dim.label}」：${dim.focus}
 
-要求：具体、可执行；能用表格就用表格；不确定的信息标「待确认」，不要编造。`,
+要求：具体、可执行；能用表格就用表格；不确定的信息标「待确认」，不要编造。${prefText}`,
     },
   ];
 }
 
-function mergeMessages(scenario, brief, sections, failures) {
+function mergeMessages(scenario, brief, sections, failures, prefs) {
   const parts = Object.entries(sections)
     .map(([key, text]) => {
       const dim = scenario.dimensions.find((d) => d.key === key);
@@ -146,6 +147,9 @@ function mergeMessages(scenario, brief, sections, failures) {
   const missing = failures.length
     ? `\n注意：以下部分生成失败，请根据其他部分补全并标注：${failures.join('、')}\n`
     : '';
+  const prefText = prefs
+    ? `\n用户偏好（优先级最高）：${prefs}\n可以据此合并、增删或重排小节，不必死守固定结构；但核心信息（时间、地点、人数、钱、责任人）不能缺。`
+    : '';
   return [
     { role: 'system', content: `你是「${scenario.title}」的总负责人。只输出 markdown 正文，不写寒暄。` },
     {
@@ -153,11 +157,11 @@ function mergeMessages(scenario, brief, sections, failures) {
       content: `你是「${scenario.title}」的总负责人。请把下面 ${Object.keys(sections).length} 份材料合并成一份可以直接使用的工作成果，输出 markdown 正文。
 
 要求：
-1. 结构统一为：${scenario.outline}。
+1. 结构参考：${scenario.outline}。可以按用户偏好调整，不必死守顺序。
 2. 消除重复，统一数字与口径，前后一致。
 3. 材料之间如有冲突或不一致，不要擅自改掉关键事实，集中写进「待确认事项」，注明各自口径与建议处理。
 4. 不要保留“同文已存为文件”“已保存”这类与成果无关的表述。
-5. 语言简洁，表格优先，能直接发给辅导员、班委或同学使用。
+5. 语言简洁，表格优先，能直接发给辅导员、班委或同学使用。${prefText}
 ${missing}
 事项简报：
 ${brief}
@@ -181,11 +185,11 @@ async function runMock(scenario, send) {
 }
 
 // ── 真实流水线：多路并行 → 合成 ───────────────────────────────────
-async function runPipeline(scenario, brief, send) {
+async function runPipeline(scenario, brief, send, prefs) {
   const settled = await Promise.allSettled(
     scenario.dimensions.map(async (dim) => {
       send({ type: 'agent', key: dim.key, status: 'running' });
-      const text = await callModel(dimensionMessages(scenario, dim, brief), 3200);
+      const text = await callModel(dimensionMessages(scenario, dim, brief, prefs), 3200);
       send({ type: 'agent', key: dim.key, status: 'done', text });
       return { key: dim.key, text };
     }),
@@ -209,7 +213,7 @@ async function runPipeline(scenario, brief, send) {
   }
 
   send({ type: 'agent', key: 'merge', status: 'running' });
-  const merged = await callModel(mergeMessages(scenario, brief, sections, failures), 5000);
+  const merged = await callModel(mergeMessages(scenario, brief, sections, failures, prefs), 5000);
   send({ type: 'agent', key: 'merge', status: 'done' });
   send({ type: 'final', text: merged });
 }
@@ -301,6 +305,142 @@ async function handleChat(req, res) {
   }
 }
 
+// ── 任务 Agent：规划 → 分步执行 → 合成 ───────────────────────────
+const AGENT_PLAN_SYSTEM = '你是任务规划器。根据用户目标拆成 3–5 个可独立完成的子任务。只输出 JSON，不要任何解释文字。';
+
+function parsePlan(text) {
+  const match = String(text).match(/\{[\s\S]*\}/);
+  if (match) {
+    try {
+      const obj = JSON.parse(match[0]);
+      const steps = (obj.steps || [])
+        .slice(0, 5)
+        .map((s, i) => ({
+          label: String(s.label || '步骤' + (i + 1)).slice(0, 40),
+          instruction: String(s.instruction || '').slice(0, 800),
+        }))
+        .filter((s) => s.instruction);
+      if (steps.length) return { title: String(obj.title || '任务成果').slice(0, 60), steps };
+    } catch (e) { /* 走兜底 */ }
+  }
+  return {
+    title: '任务成果',
+    steps: [
+      { label: '分析与拆解', instruction: '理解目标，拆成可执行的部分，指出关键约束。' },
+      { label: '具体产出', instruction: '直接给出可用的成品（通知/表格/方案/话术）。' },
+      { label: '风险与检查', instruction: '列出容易出错的地方、验收标准、需要确认的事项。' },
+    ],
+  };
+}
+
+async function handleAgent(req, res) {
+  if (ACCESS_CODE && req.headers['x-access-code'] !== ACCESS_CODE) {
+    return json(res, 401, { error: '需要访问口令', needCode: true });
+  }
+
+  let goal = '';
+  let brief = '';
+  let files = [];
+  try {
+    const body = JSON.parse((await readBody(req, 80000)).replace(/^\uFEFF/, ''));
+    goal = String(body.goal || '').trim();
+    brief = String(body.brief || '').slice(0, 2000);
+    files = Array.isArray(body.files)
+      ? body.files.slice(0, 3).map((f) => ({
+          name: String(f?.name || '附件').slice(0, 60),
+          content: String(f?.content || '').slice(0, 20000),
+        }))
+      : [];
+  } catch {
+    return json(res, 400, { error: '请求格式不对' });
+  }
+
+  if (goal.length < 5) return json(res, 400, { error: '目标描述太短，至少写 5 个字' });
+
+  const ip = clientIp(req);
+  if (!takeRate(ip)) return json(res, 429, { error: `这个小时次数用完了（上限 ${RATE_LIMIT} 次），过会儿再来` });
+
+  if (!API_KEY) {
+    return json(res, 200, {
+      title: '任务成果（演示）',
+      steps: [
+        { label: '规划', text: '演示模式：这里会列出拆解后的子任务。' },
+        { label: '执行', text: '演示模式：这里会列出每一步的产出。' },
+      ],
+      final: '> 演示模式：还没有配置模型密钥。\n\n配置 `DEEPSEEK_API_KEY` 后，任务模式会：\n\n1. 把你的目标拆成 3–5 步\n2. 并行完成每一步\n3. 合成一份完整成品\n\n目标示例：「帮我准备下周的诚信考试班会，要通知、流程、签到表」。',
+    });
+  }
+
+  let fileContext = '';
+  if (files.length) {
+    fileContext += '\n\n【附件内容】\n' + files.map((f) => `--- ${f.name} ---\n${f.content}`).join('\n\n');
+  }
+  if (brief) fileContext += `\n\n【表单内容】\n${brief}`;
+
+  const mockGoal = goal;
+
+  try {
+    // 1. 规划
+    const planText = await callModel(
+      [
+        { role: 'system', content: AGENT_PLAN_SYSTEM },
+        {
+          role: 'user',
+          content: `用户目标：${mockGoal}\n${fileContext}\n\n输出 JSON：{"title":"成果标题","steps":[{"label":"步骤名（≤10字）","instruction":"这一步要产出什么，具体到可直接使用"}]}，3–5 步。`,
+        },
+      ],
+      900,
+      0.3,
+    );
+    const plan = parsePlan(planText);
+
+    // 2. 分步执行（并行）
+    const settled = await Promise.allSettled(
+      plan.steps.map((step, idx) =>
+        callModel(
+          [
+            {
+              role: 'system',
+              content: '你是班级事务助手，只完成分配给你的这一个子任务。直接输出成品，markdown，不寒暄。',
+            },
+            {
+              role: 'user',
+              content: `总目标：${mockGoal}\n${fileContext}\n\n你的子任务（第 ${idx + 1} 步）：${step.label}\n要求：${step.instruction}\n\n只输出这一步的成品。`,
+            },
+          ],
+          2600,
+          0.7,
+        ).then((text) => ({ label: step.label, text })),
+      ),
+    );
+
+    const steps = [];
+    settled.forEach((item, idx) => {
+      if (item.status === 'fulfilled') steps.push(item.value);
+      else steps.push({ label: plan.steps[idx].label, text: '（这一步生成失败）' });
+    });
+
+    // 3. 合成
+    const material = steps.map((s, i) => `【第 ${i + 1} 步：${s.label}】\n${s.text}`).join('\n\n');
+    const final = await callModel(
+      [
+        { role: 'system', content: '你是班级事务的总负责人。把多步产出合并成一份完整成品，只输出 markdown，不寒暄。' },
+        {
+          role: 'user',
+          content: `总目标：${mockGoal}\n\n以下是各步骤的产出：\n\n${material}\n\n要求：合并成一份可直接使用的成品；去掉重复；统一数字与口径；如有冲突或缺失，最后用「待确认」列出（不超过 3 条）。`,
+        },
+      ],
+      4500,
+      0.7,
+    );
+
+    return json(res, 200, { title: plan.title, steps, final });
+  } catch (err) {
+    console.error('[agent]', err);
+    return json(res, 500, { error: err?.message || '任务执行失败' });
+  }
+}
+
 // ── HTTP 服务 ────────────────────────────────────────────────────
 async function handlePlan(req, res) {
   if (ACCESS_CODE && req.headers['x-access-code'] !== ACCESS_CODE) {
@@ -309,11 +449,13 @@ async function handlePlan(req, res) {
 
   let scenario = null;
   let brief = '';
+  let prefs = '';
   try {
     const raw = await readBody(req);
     const body = JSON.parse(raw.replace(/^\uFEFF/, ''));
     scenario = findScenario(String(body.scenarioId || 'activity'));
     brief = String(body.brief || '').trim();
+    prefs = String(body.prefs || '').slice(0, 600);
   } catch {
     return json(res, 400, { error: '请求格式不对' });
   }
@@ -348,7 +490,7 @@ async function handlePlan(req, res) {
   running += 1;
   try {
     if (!API_KEY) await runMock(scenario, send);
-    else await runPipeline(scenario, brief, send);
+    else await runPipeline(scenario, brief, send, prefs);
   } catch (err) {
     console.error('[pipeline]', err);
     send({ type: 'error', message: err?.message || String(err) });
@@ -401,6 +543,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (req.method === 'POST' && url.pathname === '/api/chat') {
       return handleChat(req, res);
+    }
+    if (req.method === 'POST' && url.pathname === '/api/agent') {
+      return handleAgent(req, res);
     }
     return json(res, 404, { error: '页面不存在' });
   } catch (err) {

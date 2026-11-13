@@ -116,6 +116,12 @@
     font-weight: 600; font-size: 14px;
   }
   .chat-head button { padding: 4px 10px; font-size: 12px; }
+  .chat-head-actions { display: flex; gap: 6px; }
+  #chat-task.active { background: var(--accent); color: #fff; }
+  .task-steps { margin-top: 8px; font-size: 12.5px; }
+  .task-steps summary { cursor: pointer; color: var(--accent); }
+  .task-steps .step { margin-top: 8px; padding-left: 8px; border-left: 2px solid #e6e8f0; }
+  .task-steps .step strong { display: block; margin-bottom: 4px; }
   .chat-body {
     flex: 1; overflow-y: auto; padding: 12px; background: #fafaff;
     display: flex; flex-direction: column; gap: 10px;
@@ -141,6 +147,14 @@
   .attach-btn { padding: 0 9px; }
   .msg-actions { display: flex; gap: 6px; margin-top: 6px; }
   .msg-actions button { padding: 3px 8px; font-size: 11.5px; }
+
+  .prefs { margin-top: 12px; }
+  .pref-chips { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .chip-btn {
+    border: 1px solid #d8dbe8; background: #fbfbff; color: #40465c;
+    border-radius: 999px; padding: 4px 11px; font-size: 12.5px; cursor: pointer;
+  }
+  .chip-btn.on { background: var(--accent); border-color: var(--accent); color: #fff; }
 
   @media (max-width: 640px) {
     .wrap { padding: 18px 12px 40px; }
@@ -177,6 +191,18 @@
       <summary>填写细节（已预填示例，不改也能直接生成）</summary>
       <div class="grid" id="fields"></div>
     </details>
+    <div class="prefs">
+      <label for="prefs">生成偏好（可选，会直接影响写法）</label>
+      <div class="pref-chips" id="pref-chips">
+        <button type="button" class="chip-btn" data-pref="简洁，少写套话">简洁</button>
+        <button type="button" class="chip-btn" data-pref="详细，给出完整细节和示例">详细</button>
+        <button type="button" class="chip-btn" data-pref="语气正式，适合发给辅导员">正式</button>
+        <button type="button" class="chip-btn" data-pref="语气轻松，适合发班级群">轻松</button>
+        <button type="button" class="chip-btn" data-pref="以表格为主">表格优先</button>
+        <button type="button" class="chip-btn" data-pref="直接给能复制使用的成品，不要解释">只要成品</button>
+      </div>
+      <input id="prefs" placeholder="例如：控制在一页内；重点写预算；不要宣传部分">
+    </div>
     <div class="row">
       <button type="submit" class="primary" id="go">生成</button>
       <button type="button" class="ghost" id="reset">重置为示例</button>
@@ -207,7 +233,10 @@
 <div class="chat-panel" id="chat-panel">
   <div class="chat-head">
     <span>班级事务助手</span>
-    <button type="button" class="ghost" id="chat-close">关闭</button>
+    <div class="chat-head-actions">
+      <button type="button" class="ghost" id="chat-task" title="任务模式：自动拆步骤再执行">🧩 任务</button>
+      <button type="button" class="ghost" id="chat-close">关闭</button>
+    </div>
   </div>
   <div class="chat-body" id="chat-body"></div>
   <div class="attach-list" id="attach-list"></div>
@@ -268,7 +297,11 @@ function fetchPlan(brief, headers) {
   return fetch('/api/plan', {
     method: 'POST',
     headers,
-    body: JSON.stringify({ scenarioId: current.id, brief }),
+    body: JSON.stringify({
+      scenarioId: current.id,
+      brief,
+      prefs: $('prefs') ? $('prefs').value.trim() : '',
+    }),
   }).then((res) => {
     if (!res.ok) {
       return res.text().then((text) => {
@@ -321,7 +354,11 @@ function xhrPlan(brief, headers) {
       reject(new Error(msg));
     };
     xhr.onerror = () => reject(new Error('网络错误'));
-    xhr.send(JSON.stringify({ scenarioId: current.id, brief }));
+    xhr.send(JSON.stringify({
+      scenarioId: current.id,
+      brief,
+      prefs: $('prefs') ? $('prefs').value.trim() : '',
+    }));
   });
 }
 
@@ -517,6 +554,9 @@ $('reset').addEventListener('click', () => {
   statusEl.textContent = '已重置为示例，可修改后生成';
   copyBtn.disabled = true;
   downloadBtn.disabled = true;
+  const prefInput = $('prefs');
+  if (prefInput) prefInput.value = '';
+  Array.prototype.forEach.call(document.querySelectorAll('.chip-btn'), (b) => b.classList.remove('on'));
 });
 
 async function copyText(text) {
@@ -686,10 +726,11 @@ function appendMsg(role, text) {
   return div;
 }
 
-function postChat(payload) {
+function postChat(payload, url) {
+  const target = url || '/api/chat';
   const body = JSON.stringify(payload);
   if (hasFetch) {
-    return fetch('/api/chat', { method: 'POST', headers: chatHeaders(), body }).then((res) =>
+    return fetch(target, { method: 'POST', headers: chatHeaders(), body }).then((res) =>
       res.text().then((text) => {
         if (!res.ok) {
           let msg = 'HTTP ' + res.status;
@@ -703,7 +744,7 @@ function postChat(payload) {
   }
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
-    xhr.open('POST', '/api/chat', true);
+    xhr.open('POST', target, true);
     const h = chatHeaders();
     Object.keys(h).forEach((k) => xhr.setRequestHeader(k, h[k]));
     xhr.onreadystatechange = () => {
@@ -722,10 +763,70 @@ function postChat(payload) {
   });
 }
 
+const chatTask = $('chat-task');
+let taskMode = false;
+chatTask.addEventListener('click', () => {
+  taskMode = !taskMode;
+  chatTask.classList.toggle('active', taskMode);
+  statusEl.textContent = taskMode ? '任务模式：会自动拆步骤再合成' : '对话模式';
+});
+
+async function sendTask(goal) {
+  const files = chatAttachments.slice();
+  const suffix = files.length ? '\n\n（附带文件：' + files.map((f) => f.name).join('、') + '）' : '';
+  const display = goal + suffix;
+  chatInput.value = '';
+  chatAttachments = [];
+  renderAttachments();
+  appendMsg('user', display);
+  chatBusy = true;
+  chatSend.disabled = true;
+  const pending = appendMsg('bot', '正在拆解任务并逐步执行，约 1–2 分钟…');
+  pending.classList.add('pending');
+  try {
+    const data = await postChat({ goal: display, brief: current ? buildBrief() : '', files }, '/api/agent');
+    pending.classList.remove('pending');
+    pending.innerHTML = '<div class="md">' + mdToHtml(data.final || '（没有结果）') + '</div>';
+    addMsgActions(pending, data.final || '');
+    if (data.steps && data.steps.length) {
+      const det = document.createElement('details');
+      det.className = 'task-steps';
+      const sum = document.createElement('summary');
+      sum.textContent = '查看分步产出（' + data.steps.length + ' 步）';
+      det.appendChild(sum);
+      data.steps.forEach((s, i) => {
+        const box = document.createElement('div');
+        box.className = 'step';
+        const head = document.createElement('strong');
+        head.textContent = (i + 1) + '. ' + s.label;
+        const body = document.createElement('div');
+        body.className = 'md';
+        body.innerHTML = mdToHtml(s.text || '');
+        box.appendChild(head);
+        box.appendChild(body);
+        det.appendChild(box);
+      });
+      pending.appendChild(det);
+    }
+    chatHistory.push({ role: 'assistant', content: data.final || '' });
+  } catch (err) {
+    pending.classList.remove('pending');
+    pending.textContent = '出错：' + (err.message || err);
+  } finally {
+    chatBusy = false;
+    chatSend.disabled = false;
+    chatBody.scrollTop = chatBody.scrollHeight;
+  }
+}
+
 async function sendChat() {
   if (chatBusy) return;
   const text = chatInput.value.trim();
   if (!text && chatAttachments.length === 0) return;
+  if (taskMode) {
+    await sendTask(text || '（见附件）');
+    return;
+  }
   const files = chatAttachments.slice();
   const suffix = files.length ? '\n\n（附带文件：' + files.map((f) => f.name).join('、') + '）' : '';
   const display = (text || '（见附件）') + suffix;
@@ -780,6 +881,23 @@ chatAttach.addEventListener('click', () => chatFile.click());
 chatFile.addEventListener('change', () => {
   addFiles(chatFile.files);
   chatFile.value = '';
+});
+
+Array.prototype.forEach.call(document.querySelectorAll('.chip-btn'), (btn) => {
+  btn.addEventListener('click', () => {
+    const val = btn.getAttribute('data-pref');
+    const input = $('prefs');
+    const parts = input.value.split('；').map((s) => s.trim()).filter(Boolean);
+    const idx = parts.indexOf(val);
+    if (idx >= 0) {
+      parts.splice(idx, 1);
+      btn.classList.remove('on');
+    } else {
+      parts.push(val);
+      btn.classList.add('on');
+    }
+    input.value = parts.join('；');
+  });
 });
 
 async function boot() {
